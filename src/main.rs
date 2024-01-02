@@ -67,6 +67,7 @@ async fn main() -> Result<(), Error> {
         .route("/ap/:ap", get(route_ap_get))
         .route("/online", get(route_online))
         .route("/offline", get(route_offline))
+        .route("/map", get(route_map))
         .with_state(db)
         .layer(TraceLayer::new_for_http());
     let listener = TcpListener::bind(&args.listen).await?;
@@ -81,7 +82,7 @@ async fn route_index(State(db): State<DB>) -> Json<Value> {
     let db = db.lock().await;
 
     Json(json!({
-        "devices": &db.list(db::DeviceQuery::All),
+        "devices": &db.device_list(db::DeviceQuery::All),
     }))
 }
 
@@ -93,11 +94,19 @@ async fn route_ap_index(State(db): State<DB>) -> Json<Value> {
     }))
 }
 
+async fn route_map(State(db): State<DB>) -> Json<Value> {
+    let db = db.lock().await;
+
+    Json(json!({
+        "device_map": db.device_map(),
+    }))
+}
+
 async fn route_mac_get(State(db): State<DB>, Path(mac): Path<String>) -> Json<Value> {
     let db = db.lock().await;
 
     Json(json!({
-        "device": db.get(mac),
+        "device": db.get(&mac),
     }))
 }
 
@@ -105,7 +114,7 @@ async fn route_ap_get(State(db): State<DB>, Path(ap): Path<String>) -> Json<Valu
     let db = db.lock().await;
 
     Json(json!({
-        "devices": db.list(db::DeviceQuery::AccessPoint(ap)),
+        "devices": db.device_list(db::DeviceQuery::AccessPoint(ap)),
     }))
 }
 
@@ -113,7 +122,7 @@ async fn route_online(State(db): State<DB>) -> Json<Value> {
     let db = db.lock().await;
 
     Json(json!({
-        "devices": db.list(db::DeviceQuery::Online),
+        "devices": db.device_list(db::DeviceQuery::Online),
     }))
 }
 
@@ -121,7 +130,7 @@ async fn route_offline(State(db): State<DB>) -> Json<Value> {
     let db = db.lock().await;
 
     Json(json!({
-        "devices": db.list(db::DeviceQuery::Offline),
+        "devices": db.device_list(db::DeviceQuery::Offline),
     }))
 }
 

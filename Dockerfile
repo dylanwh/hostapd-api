@@ -11,12 +11,11 @@ COPY Cargo.toml Cargo.toml  ./
 RUN mkdir src && \
     echo "fn main() {println!(\"if you see this, the build broke\")}" > src/main.rs && \
     cargo build --release --target=${TARGET} && \
-    rm -rf src && \
-    rm -rf target/release
+    rm -rf src
 
 COPY src ./src
 
-RUN cargo build --release --target=${TARGET}
+RUN touch src/main.rs && cargo build --release --target=${TARGET}
 
 FROM scratch
 
