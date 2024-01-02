@@ -12,7 +12,7 @@ pub struct Args {
     pub listen: SocketAddr,
 
     #[arg(long, default_value = "false")]
-    pub pretty_logs: bool,
+    pub json_logs: bool,
 }
 
 impl Args {

@@ -1,6 +1,5 @@
 mod args;
 mod parser;
-use std::sync::Arc;
 
 use args::Args;
 use axum::{extract::State, routing::get, Json, Router};
@@ -9,6 +8,7 @@ use dashmap::{DashMap, DashSet};
 use linemux::MuxedLines;
 use parser::{Action, Event};
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tokio::{net::TcpListener, signal};
 use tower_http::trace::TraceLayer;
 
@@ -43,10 +43,10 @@ async fn main() -> Result<(), Error> {
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env());
 
-    if args.pretty_logs {
-        subscriber.with_writer(std::io::stdout).pretty().init();
-    } else {
+    if args.json_logs {
         subscriber.json().init();
+    } else {
+        subscriber.with_writer(std::io::stdout).pretty().init();
     }
 
     let mut lines = MuxedLines::new()?;

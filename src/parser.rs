@@ -1,3 +1,4 @@
+use crate::Error;
 use chrono::{DateTime, Utc};
 use nom::character::complete::{char, one_of, space1};
 use nom::multi::count;
@@ -9,8 +10,6 @@ use nom::{
     sequence::terminated,
 };
 use serde::Deserialize;
-
-use crate::Error;
 
 #[derive(Debug, PartialEq)]
 pub struct Event {
@@ -44,6 +43,9 @@ struct Log {
 
 pub fn parse(input: &str) -> Result<Event, Error> {
     let log: Log = serde_json::from_str(input)?;
+
+    // for now, only parse hostapd logs
+    // I hope we don't need to parse other program's logs
     if log.program != "hostapd" {
         return Ok(Event {
             host: log.host,
@@ -68,6 +70,7 @@ pub fn parse(input: &str) -> Result<Event, Error> {
 // wl1.1: STA 32:42:fd:88:86:0c IEEE 802.11: disassociated
 // wl1.1: STA 32:42:fd:88:86:0c WPA: pairwise key handshake completed (RSN)
 // eth10: STA 04:17:b6:37:96:dc WPA: group key handshake completed (RSN)
+// eth10: STA 04:17:b6:37:96:dc RADIUS: starting accounting session 5F3F4F6F-00000000
 
 fn parse_action(input: &str) -> IResult<&str, Action> {
     let (input, _nic) = terminated(take_until(": "), tag(": "))(input)?;
