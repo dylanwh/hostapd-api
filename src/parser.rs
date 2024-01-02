@@ -143,10 +143,7 @@ fn val_macaddr(input: &str) -> IResult<&str, String> {
     let (input, _) = char(':')(input)?;
     let (input, x6) = val_hexbyte(input)?;
 
-    let mac = format!(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        x1, x2, x3, x4, x5, x6
-    );
+    let mac = format!("{x1:02x}:{x2:02x}:{x3:02x}:{x4:02x}:{x5:02x}:{x6:02x}");
 
     Ok((input, mac))
 }

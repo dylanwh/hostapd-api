@@ -1,3 +1,10 @@
+#![warn(
+    clippy::all,
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used
+)]
+
 mod args;
 mod db;
 mod parser;
@@ -136,6 +143,7 @@ async fn route_offline(State(db): State<DB>) -> Json<Value> {
 
 async fn shutdown_signal() {
     let ctrl_c = async {
+        #[allow(clippy::expect_used)]
         signal::ctrl_c()
             .await
             .expect("failed to install Ctrl+C handler");
@@ -143,6 +151,7 @@ async fn shutdown_signal() {
 
     #[cfg(unix)]
     let terminate = async {
+        #[allow(clippy::expect_used)]
         signal::unix::signal(signal::unix::SignalKind::terminate())
             .expect("failed to install signal handler")
             .recv()
@@ -153,7 +162,7 @@ async fn shutdown_signal() {
     let terminate = std::future::pending::<()>();
 
     tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
+        () = ctrl_c => {},
+        () = terminate => {},
     }
 }

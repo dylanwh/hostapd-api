@@ -8,21 +8,22 @@ use std::{
 use tokio::sync::Mutex;
 
 pub type DB = Arc<Mutex<Database>>;
-#[derive(Debug, Clone, Default, Serialize)]
+
+#[derive(Debug, Default, Serialize)]
 pub struct Database {
     devices: BTreeMap<String, Device>,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct Device {
-    pub access_points: BTreeSet<String>,
+#[derive(Debug, Default, Serialize)]
+struct Device {
+    access_points: BTreeSet<String>,
 
-    pub last_associated: Option<DateTime<Utc>>,
-    pub last_disassociated: Option<DateTime<Utc>>,
-    pub last_observed: Option<DateTime<Utc>>,
+    last_associated: Option<DateTime<Utc>>,
+    last_disassociated: Option<DateTime<Utc>>,
+    last_observed: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Serialize)]
 pub struct DeviceListItem<'a> {
     #[serde(rename = "hardware_ethernet")]
     mac: &'a str,
@@ -33,7 +34,7 @@ pub struct DeviceListItem<'a> {
     online: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct DeviceWithoutAccessPoints<'a>(&'a Device);
 
 impl<'a> Serialize for DeviceWithoutAccessPoints<'a> {
@@ -52,7 +53,7 @@ impl<'a> Serialize for DeviceWithoutAccessPoints<'a> {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Serialize)]
 pub struct DeviceMapItem<'a> {
     #[serde(rename = "hardware_ethernet")]
     mac: &'a str,
@@ -69,25 +70,25 @@ pub enum DeviceQuery {
 }
 
 impl Device {
-    pub fn associate(&mut self, timestamp: DateTime<Utc>, ap: String) {
+    fn associate(&mut self, timestamp: DateTime<Utc>, ap: String) {
         tracing::info!("associate {timestamp} {ap}");
         self.last_associated.replace(timestamp);
         self.access_points.insert(ap);
     }
 
-    pub fn observe(&mut self, timestamp: DateTime<Utc>, ap: String) {
+    fn observe(&mut self, timestamp: DateTime<Utc>, ap: String) {
         tracing::info!("observe {timestamp} {ap}");
         self.last_observed.replace(timestamp);
         self.access_points.insert(ap);
     }
 
-    pub fn disassociate(&mut self, timestamp: DateTime<Utc>, ap: String) {
+    fn disassociate(&mut self, timestamp: DateTime<Utc>, ap: &str) {
         tracing::info!("disassociate {timestamp} {ap}");
         self.last_disassociated.replace(timestamp);
-        self.access_points.remove(&ap);
+        self.access_points.remove(ap);
     }
 
-    pub fn list_item<'a>(&'a self, mac: &'a str) -> DeviceListItem<'a> {
+    fn list_item<'a>(&'a self, mac: &'a str) -> DeviceListItem<'a> {
         DeviceListItem {
             mac,
             device: self,
@@ -95,7 +96,7 @@ impl Device {
         }
     }
 
-    pub fn map_item<'a>(&'a self, mac: &'a str) -> DeviceMapItem<'a> {
+    fn map_item<'a>(&'a self, mac: &'a str) -> DeviceMapItem<'a> {
         DeviceMapItem {
             mac,
             device: DeviceWithoutAccessPoints(self),
@@ -119,14 +120,14 @@ impl<'b, 'a: 'b> Database {
         self.devices
             .iter()
             .flat_map(|(_, device)| device.access_points.iter())
-            .map(|ap| ap.as_str())
+            .map(std::string::String::as_str)
             .collect()
     }
 
     pub fn device_map(&'a self) -> BTreeMap<&'a str, Vec<DeviceMapItem<'a>>> {
         let mut map = BTreeMap::new();
-        for (mac, device) in self.devices.iter() {
-            for ap in device.access_points.iter() {
+        for (mac, device) in &self.devices {
+            for ap in &device.access_points {
                 map.entry(ap.as_str())
                     .or_insert_with(Vec::new)
                     .push(device.map_item(mac));
@@ -158,10 +159,10 @@ impl<'b, 'a: 'b> Database {
                 .devices
                 .iter()
                 .filter_map(|(mac, device)| {
-                    if !device.access_points.is_empty() {
-                        Some(device.list_item(mac))
-                    } else {
+                    if device.access_points.is_empty() {
                         None
+                    } else {
+                        Some(device.list_item(mac))
                     }
                 })
                 .collect(),
@@ -200,7 +201,7 @@ impl<'b, 'a: 'b> Database {
                 self.devices
                     .entry(mac)
                     .or_default()
-                    .disassociate(timestamp, ap);
+                    .disassociate(timestamp, &ap);
             }
             Action::Junk(msg) => {
                 tracing::error!("{timestamp} junk {ap} {msg}");
