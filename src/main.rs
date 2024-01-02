@@ -12,7 +12,7 @@ use db::Database;
 use linemux::MuxedLines;
 use serde_json::{json, Value};
 use std::{io::IsTerminal, sync::Arc};
-use tokio::{net::TcpListener, signal};
+use tokio::{net::TcpListener, signal, sync::Mutex};
 use tower_http::trace::TraceLayer;
 
 #[derive(Debug, thiserror::Error)]
@@ -27,7 +27,7 @@ pub enum Error {
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let args = Args::new();
-    let db = Arc::new(Database::new());
+    let db = Arc::new(Mutex::new(Database::new()));
 
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -55,7 +55,7 @@ async fn main() -> Result<(), Error> {
                     continue;
                 };
                 tracing::trace!("line: {}", line.line());
-                db.witness(event);
+                db.lock().await.witness(event);
             }
         });
     }
@@ -63,6 +63,9 @@ async fn main() -> Result<(), Error> {
     let router = Router::new()
         .route("/", get(index))
         .route("/mac/:mac", get(lookup_mac))
+        .route("/ap/:ap", get(lookup_ap))
+        .route("/online", get(online))
+        .route("/offline", get(offline))
         .with_state(db)
         .layer(TraceLayer::new_for_http());
     let listener = TcpListener::bind(&args.listen).await?;
@@ -73,17 +76,46 @@ async fn main() -> Result<(), Error> {
     Ok(())
 }
 
-async fn index(State(db): State<Arc<Database>>) -> Json<Value> {
+async fn index(State(db): State<Arc<Mutex<Database>>>) -> Json<Value> {
+    let db = db.lock().await;
+
     Json(json!({
-        "location": &db.location,
-        "last_seen": &db.last_seen,
+        "devices": &db.list(db::DeviceQuery::All),
     }))
 }
 
-async fn lookup_mac(State(db): State<Arc<Database>>, Path(mac): Path<String>) -> Json<Value> {
+async fn lookup_mac(
+    State(db): State<Arc<Mutex<Database>>>,
+    Path(mac): Path<String>,
+) -> Json<Value> {
+    let db = db.lock().await;
+
     Json(json!({
-        "location": db.location.get(&mac),
-        "last_seen": db.last_seen.get(&mac),
+        "device": db.get(mac),
+    }))
+}
+
+async fn lookup_ap(State(db): State<Arc<Mutex<Database>>>, Path(ap): Path<String>) -> Json<Value> {
+    let db = db.lock().await;
+
+    Json(json!({
+        "devices": db.list(db::DeviceQuery::AccessPoint(ap)),
+    }))
+}
+
+async fn online(State(db): State<Arc<Mutex<Database>>>) -> Json<Value> {
+    let db = db.lock().await;
+
+    Json(json!({
+        "devices": db.list(db::DeviceQuery::Online),
+    }))
+}
+
+async fn offline(State(db): State<Arc<Mutex<Database>>>) -> Json<Value> {
+    let db = db.lock().await;
+
+    Json(json!({
+        "devices": db.list(db::DeviceQuery::Offline),
     }))
 }
 

@@ -32,22 +32,16 @@ cargo build --release
 When running in Docker, mount the directory containing `hostapd` log files to `/var/log/messages`. Use `-f` (`--file`) to change the log file path and `-l` (`--listen`) to alter the server's listening address and port. The default is `0.0.0.0:5580`.
 
 ## API
-The current API is straightforward, featuring a single endpoint `/`. It returns a JSON object with `location` and `last_seen` fields:
-- `location`: Maps MAC addresses to the hostnames/IPs of associated access points.
-- `last_seen`: Maps MAC addresses to the last seen timestamp (ISO 8601 format, UTC).
+The current API is straightforward, featuring a single endpoint `/`. It returns a JSON object with `devices` fields:
+- `devices`: Maps MAC addresses to the hostnames/IPs of associated access points.
 
 ### Example Response
 ```json
 {
-  "location": {
+  "devices": {
     "00:00:00:00:00:01": [],
     "00:00:00:00:00:02": ["bedroom-ap"],
     "00:00:00:00:00:03": ["living-room-ap", "bedroom-ap"]
-  },
-  "last_seen": {
-    "00:00:00:00:00:01": "2020-01-01T00:00:00Z",
-    "00:00:00:00:00:02": "2020-01-01T00:00:00Z",
-    "00:00:00:00:00:03": "2020-01-01T00:00:00Z"
   }
 }
 ```

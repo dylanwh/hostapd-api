@@ -9,25 +9,41 @@ use nom::{
     combinator::map,
     sequence::terminated,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Event {
     pub timestamp: DateTime<Utc>,
-    pub host: String,
+    pub access_point: String,
+    #[serde(flatten)]
     pub action: Action,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "action")]
 pub enum Action {
-    Associated { mac: String },
+    #[serde(rename = "associated")]
+    Associated {
+        #[serde(skip_serializing)]
+        mac: String,
+    },
 
-    Disassociated { mac: String },
+    #[serde(rename = "disassociated")]
+    Disassociated {
+        #[serde(skip_serializing)]
+        mac: String,
+    },
 
-    Observed { mac: String },
+    #[serde(rename = "observed")]
+    Observed {
+        #[serde(skip_serializing)]
+        mac: String,
+    },
 
+    #[serde(skip_serializing)]
     Junk(String),
 
+    #[serde(skip_serializing)]
     Ignored,
 }
 
@@ -48,7 +64,7 @@ pub fn parse(input: &str) -> Result<Event, Error> {
     // I hope we don't need to parse other program's logs
     if log.program != "hostapd" {
         return Ok(Event {
-            host: log.host,
+            access_point: log.host,
             timestamp: log.timestamp,
             action: Action::Ignored,
         });
@@ -60,7 +76,7 @@ pub fn parse(input: &str) -> Result<Event, Error> {
     };
 
     Ok(Event {
-        host: log.host,
+        access_point: log.host,
         timestamp: log.timestamp,
         action,
     })
