@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use dashmap::{DashMap, DashSet};
 use linemux::MuxedLines;
 use parser::{Action, Event};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 
@@ -44,10 +44,7 @@ async fn main() -> Result<(), Error> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env());
 
     if args.pretty_logs {
-        subscriber
-            .with_writer(std::io::stdout)
-            .pretty()
-            .init();
+        subscriber.with_writer(std::io::stdout).pretty().init();
     } else {
         subscriber.json().init();
     }
@@ -71,7 +68,9 @@ async fn main() -> Result<(), Error> {
         });
     }
 
-    let router = Router::new().route("/", get(index)).with_state(db)
+    let router = Router::new()
+        .route("/", get(index))
+        .with_state(db)
         .layer(TraceLayer::new_for_http());
     let listener = TcpListener::bind(&args.listen).await?;
     axum::serve(listener, router).await?;
@@ -86,10 +85,7 @@ fn process_event(db: &Database, event: Event) {
         Action::Associated { mac } | Action::Observed { mac } => {
             tracing::info!("{timestamp} add {host} {mac}");
             db.last_seen.insert(mac.clone(), timestamp);
-            db.location
-                .entry(mac)
-                .or_default()
-                .insert(host);
+            db.location.entry(mac).or_default().insert(host);
         }
         Action::Disassociated { mac } => {
             tracing::info!("{timestamp} remove {host} {mac}");

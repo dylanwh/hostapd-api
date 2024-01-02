@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
-use nom::IResult;
-use nom::character::complete::{one_of, char, space1};
+use nom::character::complete::{char, one_of, space1};
 use nom::multi::count;
+use nom::IResult;
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_until},
@@ -29,7 +29,7 @@ pub enum Action {
 
     Junk(String),
 
-    Ignored
+    Ignored,
 }
 
 /// This matches the syslog-ng format
@@ -64,7 +64,6 @@ pub fn parse(input: &str) -> Result<Event, Error> {
     })
 }
 
-
 // wl1.1: STA 32:42:fd:88:86:0c IEEE 802.11: associated
 // wl1.1: STA 32:42:fd:88:86:0c IEEE 802.11: disassociated
 // wl1.1: STA 32:42:fd:88:86:0c WPA: pairwise key handshake completed (RSN)
@@ -75,8 +74,8 @@ fn parse_action(input: &str) -> IResult<&str, Action> {
     let (input, _) = tag("STA ")(input)?;
     let (input, mac) = terminated(val_macaddr, space1)(input)?;
     let (input, action) = alt((
-        map(tag("IEEE 802.11: associated"), |_| {
-            Action::Associated { mac: mac.clone() }
+        map(tag("IEEE 802.11: associated"), |_| Action::Associated {
+            mac: mac.clone(),
         }),
         map(tag("IEEE 802.11: disassociated"), |_| {
             Action::Disassociated { mac: mac.clone() }
@@ -93,7 +92,6 @@ fn parse_action(input: &str) -> IResult<&str, Action> {
     ))(input)?;
 
     Ok((input, action))
-
 }
 
 const HEX: &str = "0123456789abcdefABCDEF";
@@ -133,4 +131,3 @@ fn val_macaddr(input: &str) -> IResult<&str, String> {
 
     Ok((input, mac))
 }
-
