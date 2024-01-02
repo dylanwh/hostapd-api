@@ -5,7 +5,7 @@ use clap::Parser;
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
 pub struct Args {
-    #[arg(short, long, default_value = "/var/log/message")]
+    #[arg(short, long, default_value = "/var/log/messages")]
     pub file: PathBuf,
 
     #[arg(short, long, default_value = "0.0.0.0:5580")]
