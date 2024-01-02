@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  syslog-ng:
+    image: lscr.io/linuxserver/syslog-ng:latest
+    container_name: syslog-ng
+    environment:
+      # see supplied logrotate.conf and example cron in comment
+      - DOCKER_MODS=linuxserver/mods:universal-package-install|linuxserver/mods:universal-cron
+      - INSTALL_PACKAGES=logrotate
+      - TZ=America/Los_Angeles
+    ports:
+      - "5514:5514/udp"
+      - "6601:6601/tcp"
+      - "6514:6514/tcp"
+    volumes:
+      - syslog-ng-config:/config
+      - logs:/var/log
+    restart: unless-stopped
+
+  hostapd-api:
+    image: registry.home.arpa/hostapd-api:latest
+    environment:
+      - RUST_LOG=debug
+    volumes:
+      - logs:/var/log
+    restart: unless-stopped
+    # this is what syslog-ng above will use by default.
+    user: 911:911
+    ports:
+      - "5580:5580"
+
+volumes:
+  syslog-ng-config:
+  logs:
+
