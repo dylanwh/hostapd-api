@@ -9,7 +9,7 @@ use dashmap::{DashMap, DashSet};
 use linemux::MuxedLines;
 use parser::{Action, Event};
 use serde_json::{json, Value};
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, signal};
 use tower_http::trace::TraceLayer;
 
 type LocationMap = DashMap<String, DashSet<String>>;
@@ -73,7 +73,9 @@ async fn main() -> Result<(), Error> {
         .with_state(db)
         .layer(TraceLayer::new_for_http());
     let listener = TcpListener::bind(&args.listen).await?;
-    axum::serve(listener, router).await?;
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
     Ok(())
 }
@@ -105,4 +107,28 @@ async fn index(State(db): State<Database>) -> Json<Value> {
         "location": *(db.location),
         "last_seen": *(db.last_seen),
     }))
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
 }
