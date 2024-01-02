@@ -8,7 +8,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use db::Database;
+use db::{Database, DB};
 use linemux::MuxedLines;
 use serde_json::{json, Value};
 use std::{io::IsTerminal, sync::Arc};
@@ -61,11 +61,12 @@ async fn main() -> Result<(), Error> {
     }
 
     let router = Router::new()
-        .route("/", get(index))
-        .route("/mac/:mac", get(lookup_mac))
-        .route("/ap/:ap", get(lookup_ap))
-        .route("/online", get(online))
-        .route("/offline", get(offline))
+        .route("/", get(route_index))
+        .route("/mac/:mac", get(route_mac_get))
+        .route("/ap", get(route_ap_index))
+        .route("/ap/:ap", get(route_ap_get))
+        .route("/online", get(route_online))
+        .route("/offline", get(route_offline))
         .with_state(db)
         .layer(TraceLayer::new_for_http());
     let listener = TcpListener::bind(&args.listen).await?;
@@ -76,7 +77,7 @@ async fn main() -> Result<(), Error> {
     Ok(())
 }
 
-async fn index(State(db): State<Arc<Mutex<Database>>>) -> Json<Value> {
+async fn route_index(State(db): State<DB>) -> Json<Value> {
     let db = db.lock().await;
 
     Json(json!({
@@ -84,10 +85,15 @@ async fn index(State(db): State<Arc<Mutex<Database>>>) -> Json<Value> {
     }))
 }
 
-async fn lookup_mac(
-    State(db): State<Arc<Mutex<Database>>>,
-    Path(mac): Path<String>,
-) -> Json<Value> {
+async fn route_ap_index(State(db): State<DB>) -> Json<Value> {
+    let db = db.lock().await;
+
+    Json(json!({
+        "access_points": db.access_points(),
+    }))
+}
+
+async fn route_mac_get(State(db): State<DB>, Path(mac): Path<String>) -> Json<Value> {
     let db = db.lock().await;
 
     Json(json!({
@@ -95,7 +101,7 @@ async fn lookup_mac(
     }))
 }
 
-async fn lookup_ap(State(db): State<Arc<Mutex<Database>>>, Path(ap): Path<String>) -> Json<Value> {
+async fn route_ap_get(State(db): State<DB>, Path(ap): Path<String>) -> Json<Value> {
     let db = db.lock().await;
 
     Json(json!({
@@ -103,7 +109,7 @@ async fn lookup_ap(State(db): State<Arc<Mutex<Database>>>, Path(ap): Path<String
     }))
 }
 
-async fn online(State(db): State<Arc<Mutex<Database>>>) -> Json<Value> {
+async fn route_online(State(db): State<DB>) -> Json<Value> {
     let db = db.lock().await;
 
     Json(json!({
@@ -111,7 +117,7 @@ async fn online(State(db): State<Arc<Mutex<Database>>>) -> Json<Value> {
     }))
 }
 
-async fn offline(State(db): State<Arc<Mutex<Database>>>) -> Json<Value> {
+async fn route_offline(State(db): State<DB>) -> Json<Value> {
     let db = db.lock().await;
 
     Json(json!({

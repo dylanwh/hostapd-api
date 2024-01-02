@@ -1,10 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet};
-
+use crate::parser::{Action, Event};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
+use tokio::sync::Mutex;
 
-use crate::parser::{Action, Event};
-
+pub type DB = Arc<Mutex<Database>>;
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Database {
     devices: BTreeMap<String, Device>,
@@ -81,6 +84,14 @@ impl Database {
             return Some(device.list_item(mac));
         }
         None
+    }
+
+    pub fn access_points(&self) -> BTreeSet<String> {
+        self.devices
+            .iter()
+            .flat_map(|(_, device)| device.access_points.iter())
+            .cloned()
+            .collect()
     }
 
     pub fn list(&self, query: DeviceQuery) -> Vec<DeviceListItem> {
