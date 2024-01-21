@@ -1,6 +1,5 @@
-use std::{net::SocketAddr, path::PathBuf};
-
 use clap::Parser;
+use std::{net::SocketAddr, path::PathBuf};
 
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
@@ -13,6 +12,9 @@ pub struct Args {
 
     #[arg(long, default_value = "false")]
     pub json_logs: bool,
+
+    #[arg(env="WATCHDOG_URL")]
+    pub watchdog_url: Option<String>,
 }
 
 impl Args {

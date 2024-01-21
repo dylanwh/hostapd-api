@@ -12,6 +12,7 @@ pub type DB = Arc<Mutex<Database>>;
 #[derive(Debug, Default, Serialize)]
 pub struct Database {
     devices: BTreeMap<String, Device>,
+    pub last_event_timestamp: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -183,6 +184,7 @@ impl<'b, 'a: 'b> Database {
 
     pub fn witness(&mut self, event: Event) {
         let timestamp = event.timestamp;
+        self.last_event_timestamp.replace(timestamp);
         let ap = event.access_point;
         match event.action {
             Action::Associated { mac } => {

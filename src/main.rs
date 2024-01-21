@@ -15,12 +15,13 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use chrono::{Duration, Utc};
 use db::{Database, DB};
 use linemux::{Line, MuxedLines};
 use parser::Event;
 use serde_json::{json, Value};
 use std::{io::IsTerminal, sync::Arc};
-use tokio::{net::TcpListener, signal, sync::Mutex};
+use tokio::{net::TcpListener, signal, sync::Mutex, time::interval};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
 
@@ -91,7 +92,7 @@ async fn main() -> Result<(), Error> {
         .route("/online", get(route_online))
         .route("/offline", get(route_offline))
         .route("/map", get(route_map))
-        .with_state(db)
+        .with_state(db.clone())
         .layer(TraceLayer::new_for_http());
     let listener = TcpListener::bind(&args.listen).await?;
     {
@@ -105,6 +106,15 @@ async fn main() -> Result<(), Error> {
             if let Err(e) = serve {
                 tracing::error!("server error: {}", e);
             }
+        });
+    }
+
+    if let Some(ref watchdog_url) = args.watchdog_url {
+        let db = db.clone();
+        let shutdown = shutdown.clone();
+        let watchdog_url = watchdog_url.clone();
+        tracker.spawn(async move {
+            watchdog_loop(&watchdog_url, db, shutdown).await;
         });
     }
 
@@ -233,4 +243,55 @@ async fn shutdown_signal() {
         () = ctrl_c => {},
         () = terminate => {},
     }
+}
+
+async fn watchdog_loop(watchdog_url: &str, db: DB, shutdown: CancellationToken) {
+    let client = reqwest::Client::new();
+    let mut watchdog = interval(std::time::Duration::from_secs(60));
+    let mut watchdog_fired = false;
+    let watchdog_started = Utc::now();
+    let watchdog_period = Duration::minutes(30);
+    loop {
+        tokio::select! {
+            () = shutdown.cancelled() => {
+                break;
+            }
+            _ = watchdog.tick() => {
+                let now = Utc::now();
+                match db.lock().await.last_event_timestamp {
+                    Some(t) if now - t < watchdog_period && !watchdog_fired => {
+                        tracing::warn!("watchdog: no events in 30 minutes, sending notification");
+                        watchdog_alert(&client, watchdog_url, now - t).await;
+                        watchdog_fired = true;
+                    }
+                    None if now - watchdog_started > watchdog_period && !watchdog_fired => {
+                        tracing::warn!("watchdog: never seen any events in 30 minutes, sending notification");
+                        watchdog_alert(&client, watchdog_url, now - watchdog_started).await;
+                        watchdog_fired = true;
+                    }
+                    _ => { }
+                }
+
+
+
+            }
+        }
+    }
+}
+
+
+#[derive(Debug, serde::Serialize)]
+struct WatchdogBody {
+    text: String
+}
+
+async fn watchdog_alert(client: &reqwest::Client, url: &str, period: Duration) {
+    let resp = client.post(url).json(&WatchdogBody {
+        text: format!("No hostapd events in {} minutes", period.num_minutes()),
+    }).send().await;
+
+    if let Err(e) = resp {
+        tracing::error!("error sending watchdog alert: {}", e);
+    }
+
 }
