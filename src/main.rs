@@ -16,10 +16,12 @@ use axum::{
     Json, Router,
 };
 use db::{Database, DB};
-use linemux::MuxedLines;
+use linemux::{Line, MuxedLines};
+use parser::Event;
 use serde_json::{json, Value};
 use std::{io::IsTerminal, sync::Arc};
 use tokio::{net::TcpListener, signal, sync::Mutex};
+use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
 
 #[derive(Debug, thiserror::Error)]
@@ -35,6 +37,8 @@ pub enum Error {
 async fn main() -> Result<(), Error> {
     let args = Args::new();
     let db = Arc::new(Mutex::new(Database::new()));
+    let tracker = tokio_util::task::TaskTracker::new();
+    let shutdown = CancellationToken::new();
 
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -53,16 +57,28 @@ async fn main() -> Result<(), Error> {
 
     {
         let db = db.clone();
-        tokio::spawn(async move {
-            // Jan  1 09:42:46 den-ap hostapd: wl1.1: STA 32:42:fd:88:86:0c IEEE 802.11: associated
-            // capture den-ap and 32:42:fd:88:86:0c
-            while let Ok(Some(line)) = lines.next_line().await {
-                let Ok(event) = parser::parse(line.line()) else {
-                    tracing::error!("error parsing line: {}", line.line());
-                    continue;
-                };
-                tracing::trace!("line: {}", line.line());
-                db.lock().await.witness(event);
+        let shutdown = shutdown.clone();
+        tracker.spawn(async move {
+            loop {
+                tokio::select! {
+                    next_line = lines.next_line() => {
+                        match process(next_line) {
+                            Action::Witness(event) => {
+                                db.lock().await.witness(event);
+                            }
+                            Action::Continue => {
+                                continue;
+                            }
+                            Action::Shutdown => {
+                                shutdown.cancel();
+                                break;
+                            }
+                        }
+                    }
+                    () = shutdown.cancelled() => {
+                        break;
+                    }
+                }
             }
         });
     }
@@ -78,11 +94,62 @@ async fn main() -> Result<(), Error> {
         .with_state(db)
         .layer(TraceLayer::new_for_http());
     let listener = TcpListener::bind(&args.listen).await?;
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    {
+        let shutdown = shutdown.clone();
+        tracker.spawn(async move {
+            let serve = axum::serve(listener, router)
+                .with_graceful_shutdown(async move {
+                    shutdown.cancelled().await;
+                })
+                .await;
+            if let Err(e) = serve {
+                tracing::error!("server error: {}", e);
+            }
+        });
+    }
+
+    tracker.close();
+
+    tokio::select! {
+        () = shutdown_signal() => {
+            tracing::info!("shutting down");
+            shutdown.cancel();
+        }
+        () = shutdown.cancelled() => {
+            tracing::info!("got shutdown event");
+        }
+    }
+
+    tracker.wait().await;
 
     Ok(())
+}
+
+enum Action {
+    Witness(Event),
+    Continue,
+    Shutdown,
+}
+
+fn process(next_line: Result<Option<Line>, std::io::Error>) -> Action {
+    match next_line {
+        Ok(Some(line)) => {
+            if let Ok(event) = parser::parse(line.line()) {
+                Action::Witness(event)
+            } else {
+                tracing::error!("error parsing line: {}", line.line());
+                Action::Continue
+            }
+        }
+        Ok(None) => {
+            tracing::error!("no files were ever added, exiting");
+            Action::Shutdown
+        }
+        Err(e) => {
+            tracing::error!("error reading line: {}", e);
+            Action::Shutdown
+        }
+    }
 }
 
 async fn route_index(State(db): State<DB>) -> Json<Value> {
@@ -121,6 +188,7 @@ async fn route_ap_get(State(db): State<DB>, Path(ap): Path<String>) -> Json<Valu
     let db = db.lock().await;
 
     Json(json!({
+        "name": ap,
         "devices": db.device_list(db::DeviceQuery::AccessPoint(ap)),
     }))
 }
