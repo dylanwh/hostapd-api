@@ -25,6 +25,8 @@ use tokio::{net::TcpListener, signal, sync::Mutex, time::interval};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
 
+use crate::db::StationQuery;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
@@ -32,6 +34,12 @@ pub enum Error {
 
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("error parsing message: {0}")]
+    Parse(String),
+
+    #[error("no files were added to the file reader")]
+    NoFilesAdded,
 }
 
 #[tokio::main]
@@ -64,15 +72,15 @@ async fn main() -> Result<(), Error> {
                 tokio::select! {
                     next_line = lines.next_line() => {
                         match process(next_line) {
-                            Action::Witness(event) => {
+                            Ok(Some(event)) => {
                                 db.lock().await.witness(event);
                             }
-                            Action::Continue => {
+                            Ok(None) => {
                                 continue;
                             }
-                            Action::Shutdown => {
+                            Err(e) => {
                                 shutdown.cancel();
-                                break;
+                                tracing::error!("error parsing log: {}", e);
                             }
                         }
                     }
@@ -87,11 +95,15 @@ async fn main() -> Result<(), Error> {
     let router = Router::new()
         .route("/", get(route_index))
         .route("/mac/:mac", get(route_mac_get))
+        .route("/stations", get(route_station_index))
         .route("/ap", get(route_ap_index))
         .route("/ap/:ap", get(route_ap_get))
+        .route("/ap/:ap/:interface", get(route_ap_interface_get))
+        .route("/interface/:interface", get(route_interface_get))
         .route("/online", get(route_online))
         .route("/offline", get(route_offline))
         .route("/map", get(route_map))
+        .route("/map/stations", get(route_map_stations))
         .with_state(db.clone())
         .layer(TraceLayer::new_for_http());
     let listener = TcpListener::bind(&args.listen).await?;
@@ -135,30 +147,18 @@ async fn main() -> Result<(), Error> {
     Ok(())
 }
 
-enum Action {
-    Witness(Event),
-    Continue,
-    Shutdown,
-}
-
-fn process(next_line: Result<Option<Line>, std::io::Error>) -> Action {
+fn process(next_line: Result<Option<Line>, std::io::Error>) -> Result<Option<Event>, Error> {
     match next_line {
-        Ok(Some(line)) => {
-            if let Ok(event) = parser::parse(line.line()) {
-                Action::Witness(event)
-            } else {
-                tracing::error!("error parsing line: {}", line.line());
-                Action::Continue
+        Ok(Some(line)) => match parser::parse(line.line()) {
+            Ok(Some(event)) => Ok(Some(event)),
+            Ok(None) => Ok(None),
+            Err(e) => {
+                tracing::debug!("error parsing message: {}", e);
+                Ok(None)
             }
-        }
-        Ok(None) => {
-            tracing::error!("no files were ever added, exiting");
-            Action::Shutdown
-        }
-        Err(e) => {
-            tracing::error!("error reading line: {}", e);
-            Action::Shutdown
-        }
+        },
+        Ok(None) => Err(Error::NoFilesAdded),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -167,6 +167,14 @@ async fn route_index(State(db): State<DB>) -> Json<Value> {
 
     Json(json!({
         "devices": &db.device_list(db::DeviceQuery::All),
+    }))
+}
+
+async fn route_station_index(State(db): State<DB>) -> Json<Value> {
+    let db = db.lock().await;
+
+    Json(json!({
+        "stations": db.stations(),
     }))
 }
 
@@ -186,6 +194,14 @@ async fn route_map(State(db): State<DB>) -> Json<Value> {
     }))
 }
 
+async fn route_map_stations(State(db): State<DB>) -> Json<Value> {
+    let db = db.lock().await;
+
+    Json(json!({
+        "station_map": db.station_map(),
+    }))
+}
+
 async fn route_mac_get(State(db): State<DB>, Path(mac): Path<String>) -> Json<Value> {
     let db = db.lock().await;
 
@@ -196,10 +212,33 @@ async fn route_mac_get(State(db): State<DB>, Path(mac): Path<String>) -> Json<Va
 
 async fn route_ap_get(State(db): State<DB>, Path(ap): Path<String>) -> Json<Value> {
     let db = db.lock().await;
+    let devices = db.device_list(db::DeviceQuery::Station(StationQuery::Hostname(ap)));
 
     Json(json!({
-        "name": ap,
-        "devices": db.device_list(db::DeviceQuery::AccessPoint(ap)),
+        "devices": devices,
+    }))
+}
+
+async fn route_ap_interface_get(
+    State(db): State<DB>,
+    Path((ap, interface)): Path<(String, String)>,
+) -> Json<Value> {
+    let db = db.lock().await;
+    let devices = db.device_list(db::DeviceQuery::Station(StationQuery::HostnameInterface(
+        ap, interface,
+    )));
+
+    Json(json!({
+        "devices": devices
+    }))
+}
+
+async fn route_interface_get(State(db): State<DB>, Path(interface): Path<String>) -> Json<Value> {
+    let db = db.lock().await;
+    let devices = db.device_list(db::DeviceQuery::Station(StationQuery::Interface(interface)));
+
+    Json(json!({
+        "devices": devices
     }))
 }
 
@@ -279,19 +318,21 @@ async fn watchdog_loop(watchdog_url: &str, db: DB, shutdown: CancellationToken) 
     }
 }
 
-
 #[derive(Debug, serde::Serialize)]
 struct WatchdogBody {
-    text: String
+    text: String,
 }
 
 async fn watchdog_alert(client: &reqwest::Client, url: &str, period: Duration) {
-    let resp = client.post(url).json(&WatchdogBody {
-        text: format!("No hostapd events in {} minutes", period.num_minutes()),
-    }).send().await;
+    let resp = client
+        .post(url)
+        .json(&WatchdogBody {
+            text: format!("No hostapd events in {} minutes", period.num_minutes()),
+        })
+        .send()
+        .await;
 
     if let Err(e) = resp {
         tracing::error!("error sending watchdog alert: {}", e);
     }
-
 }

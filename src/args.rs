@@ -19,7 +19,7 @@ pub struct Args {
 
     /// This is a URL that is presumably a Pushcut URL, accepting a POST request with a JSON body
     /// containing a `text` field.
-    #[arg(env="WATCHDOG_URL")]
+    #[arg(env = "WATCHDOG_URL")]
     pub watchdog_url: Option<String>,
 }
 

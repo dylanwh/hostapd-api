@@ -2,19 +2,21 @@ use crate::Error;
 use chrono::{DateTime, Utc};
 use nom::character::complete::{char, one_of, space1};
 use nom::multi::count;
-use nom::IResult;
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_until},
     combinator::map,
     sequence::terminated,
 };
+use nom::{Finish, IResult};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Event {
     pub timestamp: DateTime<Utc>,
-    pub access_point: String,
+    pub hostname: String,
+    pub interface: String,
+    pub mac: String,
     #[serde(flatten)]
     pub action: Action,
 }
@@ -23,28 +25,13 @@ pub struct Event {
 #[serde(tag = "action")]
 pub enum Action {
     #[serde(rename = "associated")]
-    Associated {
-        #[serde(skip_serializing)]
-        mac: String,
-    },
+    Associated,
 
     #[serde(rename = "disassociated")]
-    Disassociated {
-        #[serde(skip_serializing)]
-        mac: String,
-    },
+    Disassociated,
 
     #[serde(rename = "observed")]
-    Observed {
-        #[serde(skip_serializing)]
-        mac: String,
-    },
-
-    #[serde(skip_serializing)]
-    Junk(String),
-
-    #[serde(skip_serializing)]
-    Ignored,
+    Observed,
 }
 
 /// This matches the syslog-ng format
@@ -57,29 +44,26 @@ struct Log {
     message: String,
 }
 
-pub fn parse(input: &str) -> Result<Event, Error> {
+pub fn parse(input: &str) -> Result<Option<Event>, Error> {
     let log: Log = serde_json::from_str(input)?;
 
     // for now, only parse hostapd logs
     // I hope we don't need to parse other program's logs
     if log.program != "hostapd" {
-        return Ok(Event {
-            access_point: log.host,
-            timestamp: log.timestamp,
-            action: Action::Ignored,
-        });
+        return Ok(None);
     }
 
-    let action = match parse_action(&log.message) {
-        Ok((_, action)) => action,
-        Err(_) => Action::Junk(log.message),
-    };
-
-    Ok(Event {
-        access_point: log.host,
-        timestamp: log.timestamp,
-        action,
-    })
+    match parse_message(&log.message).finish() {
+        Ok((_, (interface, mac, Some(action)))) => Ok(Some(Event {
+            timestamp: log.timestamp,
+            hostname: log.host,
+            interface,
+            mac,
+            action,
+        })),
+        Ok((_, (_, _, None))) => Ok(None),
+        Err(e) => Err(Error::Parse(e.to_string())),
+    }
 }
 
 // wl1.1: STA 32:42:fd:88:86:0c IEEE 802.11: associated
@@ -88,29 +72,25 @@ pub fn parse(input: &str) -> Result<Event, Error> {
 // eth10: STA 04:17:b6:37:96:dc WPA: group key handshake completed (RSN)
 // eth10: STA 04:17:b6:37:96:dc RADIUS: starting accounting session 5F3F4F6F-00000000
 
-fn parse_action(input: &str) -> IResult<&str, Action> {
-    let (input, _nic) = terminated(take_until(": "), tag(": "))(input)?;
+fn parse_message(input: &str) -> IResult<&str, (String, String, Option<Action>)> {
+    let (input, interface) = terminated(take_until(": "), tag(": "))(input)?;
     let (input, _) = tag("STA ")(input)?;
     let (input, mac) = terminated(val_macaddr, space1)(input)?;
     let (input, action) = alt((
-        map(tag("IEEE 802.11: associated"), |_| Action::Associated {
-            mac: mac.clone(),
-        }),
+        map(tag("IEEE 802.11: associated"), |_| Some(Action::Associated)),
         map(tag("IEEE 802.11: disassociated"), |_| {
-            Action::Disassociated { mac: mac.clone() }
+            Some(Action::Disassociated)
         }),
         map(tag("WPA: pairwise key handshake completed (RSN)"), |_| {
-            Action::Observed { mac: mac.clone() }
+            Some(Action::Observed)
         }),
         map(tag("WPA: group key handshake completed (RSN)"), |_| {
-            Action::Observed { mac: mac.clone() }
+            Some(Action::Observed)
         }),
-        map(tag("RADIUS: starting accounting session"), |_| {
-            Action::Ignored
-        }),
+        map(tag("RADIUS: starting accounting session"), |_| None),
     ))(input)?;
 
-    Ok((input, action))
+    Ok((input, (interface.to_string(), mac, action)))
 }
 
 const HEX: &str = "0123456789abcdefABCDEF";

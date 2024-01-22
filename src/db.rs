@@ -1,6 +1,6 @@
 use crate::parser::{Action, Event};
 use chrono::{DateTime, Utc};
-use serde::{Serialize, ser::SerializeMap};
+use serde::{ser::SerializeMap, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -15,9 +15,21 @@ pub struct Database {
     pub last_event_timestamp: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct Station {
+    pub hostname: String,
+    pub interface: String,
+}
+
+impl std::fmt::Display for Station {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}@{}", self.hostname, self.interface)
+    }
+}
+
 #[derive(Debug, Default, Serialize)]
 struct Device {
-    access_points: BTreeSet<String>,
+    stations: BTreeSet<Station>,
 
     last_associated: Option<DateTime<Utc>>,
     last_disassociated: Option<DateTime<Utc>>,
@@ -29,6 +41,8 @@ pub struct DeviceListItem<'a> {
     #[serde(rename = "hardware_ethernet")]
     mac: &'a str,
 
+    access_points: BTreeSet<&'a str>,
+
     #[serde(flatten)]
     device: &'a Device,
 
@@ -36,9 +50,9 @@ pub struct DeviceListItem<'a> {
 }
 
 #[derive(Debug)]
-struct DeviceWithoutAccessPoints<'a>(&'a Device);
+struct DeviceWithoutStations<'a>(&'a Device);
 
-impl<'a> Serialize for DeviceWithoutAccessPoints<'a> {
+impl<'a> Serialize for DeviceWithoutStations<'a> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serde::ser::Serializer::serialize_map(serializer, Some(3))?;
         if let Some(last_associated) = self.0.last_associated {
@@ -60,47 +74,58 @@ pub struct DeviceMapItem<'a> {
     mac: &'a str,
 
     #[serde(flatten)]
-    device: DeviceWithoutAccessPoints<'a>,
+    device: DeviceWithoutStations<'a>,
+}
+
+pub enum StationQuery {
+    Hostname(String),
+    Interface(String),
+    HostnameInterface(String, String),
 }
 
 pub enum DeviceQuery {
     All,
     Online,
     Offline,
-    AccessPoint(String),
+    Station(StationQuery),
 }
 
 impl Device {
-    fn associate(&mut self, timestamp: DateTime<Utc>, ap: String) {
+    fn access_points(&self) -> BTreeSet<&str> {
+        self.stations.iter().map(|s| s.hostname.as_str()).collect()
+    }
+
+    fn associate(&mut self, timestamp: DateTime<Utc>, ap: Station) {
         tracing::info!("associate {timestamp} {ap}");
         self.last_associated.replace(timestamp);
-        self.access_points.insert(ap);
+        self.stations.insert(ap);
     }
 
-    fn observe(&mut self, timestamp: DateTime<Utc>, ap: String) {
+    fn observe(&mut self, timestamp: DateTime<Utc>, ap: Station) {
         tracing::info!("observe {timestamp} {ap}");
         self.last_observed.replace(timestamp);
-        self.access_points.insert(ap);
+        self.stations.insert(ap);
     }
 
-    fn disassociate(&mut self, timestamp: DateTime<Utc>, ap: &str) {
+    fn disassociate(&mut self, timestamp: DateTime<Utc>, ap: &Station) {
         tracing::info!("disassociate {timestamp} {ap}");
         self.last_disassociated.replace(timestamp);
-        self.access_points.remove(ap);
+        self.stations.remove(ap);
     }
 
     fn list_item<'a>(&'a self, mac: &'a str) -> DeviceListItem<'a> {
         DeviceListItem {
             mac,
             device: self,
-            online: !self.access_points.is_empty(),
+            access_points: self.access_points(),
+            online: !self.stations.is_empty(),
         }
     }
 
     fn map_item<'a>(&'a self, mac: &'a str) -> DeviceMapItem<'a> {
         DeviceMapItem {
             mac,
-            device: DeviceWithoutAccessPoints(self),
+            device: DeviceWithoutStations(self),
         }
     }
 }
@@ -120,16 +145,42 @@ impl<'b, 'a: 'b> Database {
     pub fn access_points(&self) -> BTreeSet<&str> {
         self.devices
             .iter()
-            .flat_map(|(_, device)| device.access_points.iter())
-            .map(std::string::String::as_str)
+            .flat_map(|(_, device)| device.stations.iter())
+            .map(|s| s.hostname.as_str())
             .collect()
+    }
+
+    pub fn stations(&self) -> BTreeMap<String, BTreeSet<&str>> {
+        let mut map = BTreeMap::new();
+        for device in self.devices.values() {
+            for sta in &device.stations {
+                map.entry(sta.hostname.clone())
+                    .or_insert_with(BTreeSet::new)
+                    .insert(sta.interface.as_str());
+            }
+        }
+        map
     }
 
     pub fn device_map(&'a self) -> BTreeMap<&'a str, Vec<DeviceMapItem<'a>>> {
         let mut map = BTreeMap::new();
         for (mac, device) in &self.devices {
-            for ap in &device.access_points {
-                map.entry(ap.as_str())
+            for ap in &device.stations {
+                map.entry(ap.hostname.as_str())
+                    .or_insert_with(Vec::new)
+                    .push(device.map_item(mac));
+            }
+        }
+        map
+    }
+
+    pub fn station_map(&'a self) -> BTreeMap<&'a str, BTreeMap<&'a str, Vec<DeviceMapItem<'a>>>> {
+        let mut map = BTreeMap::new();
+        for (mac, device) in &self.devices {
+            for ap in &device.stations {
+                map.entry(ap.hostname.as_str())
+                    .or_insert_with(BTreeMap::new)
+                    .entry(ap.interface.as_str())
                     .or_insert_with(Vec::new)
                     .push(device.map_item(mac));
             }
@@ -144,23 +195,48 @@ impl<'b, 'a: 'b> Database {
                 .iter()
                 .map(|(mac, device)| device.list_item(mac))
                 .collect(),
-            DeviceQuery::AccessPoint(ap) => self
+            DeviceQuery::Station(StationQuery::Hostname(ap)) => self
                 .devices
                 .iter()
                 .filter_map(|(mac, device)| {
-                    if device.access_points.contains(&ap) {
+                    if device.stations.iter().any(|s| s.hostname == ap) {
                         Some(device.list_item(mac))
                     } else {
                         None
                     }
                 })
                 .collect(),
-
+            DeviceQuery::Station(StationQuery::Interface(ap)) => self
+                .devices
+                .iter()
+                .filter_map(|(mac, device)| {
+                    if device.stations.iter().any(|s| s.interface == ap) {
+                        Some(device.list_item(mac))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            DeviceQuery::Station(StationQuery::HostnameInterface(ap, interface)) => self
+                .devices
+                .iter()
+                .filter_map(|(mac, device)| {
+                    if device
+                        .stations
+                        .iter()
+                        .any(|s| s.hostname == ap && s.interface == interface)
+                    {
+                        Some(device.list_item(mac))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
             DeviceQuery::Online => self
                 .devices
                 .iter()
                 .filter_map(|(mac, device)| {
-                    if device.access_points.is_empty() {
+                    if device.stations.is_empty() {
                         None
                     } else {
                         Some(device.list_item(mac))
@@ -172,7 +248,7 @@ impl<'b, 'a: 'b> Database {
                 .devices
                 .iter()
                 .filter_map(|(mac, device)| {
-                    if device.access_points.is_empty() {
+                    if device.stations.is_empty() {
                         Some(device.list_item(mac))
                     } else {
                         None
@@ -182,33 +258,41 @@ impl<'b, 'a: 'b> Database {
         }
     }
 
-    pub fn witness(&mut self, event: Event) {
-        let timestamp = event.timestamp;
+    pub fn witness(
+        &mut self,
+        Event {
+            timestamp,
+            hostname,
+            interface,
+            mac,
+            action,
+            ..
+        }: Event,
+    ) {
+        let station = Station {
+            hostname,
+            interface,
+        };
         self.last_event_timestamp.replace(timestamp);
-        let ap = event.access_point;
-        match event.action {
-            Action::Associated { mac } => {
+        match action {
+            Action::Associated => {
                 self.devices
                     .entry(mac)
                     .or_default()
-                    .associate(timestamp, ap);
+                    .associate(timestamp, station);
             }
-            Action::Observed { mac } => {
+            Action::Observed => {
                 self.devices
                     .entry(mac)
                     .or_default()
-                    .observe(timestamp, ap);
+                    .observe(timestamp, station);
             }
-            Action::Disassociated { mac } => {
+            Action::Disassociated => {
                 self.devices
                     .entry(mac)
                     .or_default()
-                    .disassociate(timestamp, &ap);
+                    .disassociate(timestamp, &station);
             }
-            Action::Junk(msg) => {
-                tracing::error!("{timestamp} junk {ap} {msg}");
-            }
-            Action::Ignored => {}
         }
     }
 }
